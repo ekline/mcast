@@ -35,8 +35,10 @@ int main(int argc, char * argv[]) {
         exit(-1);
     }
 
+    // TODO: things that should be command line flags
     const in_addr_t mc_dest = inet_addr("239.255.255.251");
     const in_port_t port = 10101;
+    // const int mtu = 1500;
 
     auto socket_or{socket::makeIPv4()};
     if (not ok(socket_or)) {
@@ -61,7 +63,9 @@ int main(int argc, char * argv[]) {
                 socket::enable(s, IPPROTO_IP, IP_RECVTOS),
                 socket::enable(s, IPPROTO_IP, IP_RECVTTL),
                 socket::enable(s, IPPROTO_IP, IP_PKTINFO),
+#ifdef IP_MULTICAST_ALL  // not available on macOS
                 socket::disable(s, IPPROTO_IP, IP_MULTICAST_ALL),
+#endif
                 socket::disable(s, IPPROTO_IP, IP_MULTICAST_LOOP),
                 socket::set(s, IPPROTO_IP, IP_MULTICAST_TTL, 4),
                 socket::set(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, mc_group),

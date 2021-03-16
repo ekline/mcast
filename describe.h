@@ -13,7 +13,6 @@ LICENSE_END */
 #ifndef MCAST_DESCRIBE_H
 #define MCAST_DESCRIBE_H
 
-#include <netdb.h>
 
 #include <sstream>
 #include <string>
@@ -23,31 +22,14 @@ LICENSE_END */
 
 namespace mcast {
 
-std::string describe(const socket::Message msg, ssize_t rcvd) {
+std::string describe(const socket::Msg msg, ssize_t rcvd) {
     if (rcvd < 0) {
         return "error (see POSIX errno message)";
     }
 
     std::stringstream str{};
 
-    str << "received " << rcvd << " bytes from ";
-    switch (msg.ss.ss_family) {
-        case AF_INET:
-        case AF_INET6: {
-            char hbuf[NI_MAXHOST]{}, sbuf[NI_MAXSERV]{};
-
-            ::getnameinfo(msg.sockaddr_ptr(), msg.socklen(),
-                          hbuf, sizeof(hbuf),
-                          sbuf, sizeof(sbuf),
-                          (NI_NUMERICHOST | NI_NUMERICSERV));
-            str << "{" << hbuf << ", " << sbuf << "}";
-            break;
-        }
-
-        default:
-            str << "unknown address family: " << msg.ss.ss_family;
-            return str.str();
-    }
+    str << "received " << rcvd << " bytes from " << socket::to_string(msg.ss);
 
     return str.str();
 }

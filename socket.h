@@ -13,18 +13,69 @@ LICENSE_END */
 #ifndef MCAST_SOCKET_H
 #define MCAST_SOCKET_H
 
+#include <netdb.h>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <functional>
+#include <sstream>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "error.h"
 
 namespace mcast {
 namespace socket {
+
+inline struct sockaddr* sockaddr_ptr(struct sockaddr_storage& ss) noexcept {
+    return reinterpret_cast<struct sockaddr*>(&ss);
+}
+
+inline const struct sockaddr*
+sockaddr_ptr(const struct sockaddr_storage& ss) noexcept {
+    return reinterpret_cast<const struct sockaddr*>(&ss);
+}
+
+inline socklen_t socklen(const struct sockaddr_storage& ss) noexcept {
+    switch (ss.ss_family) {
+        case AF_INET:  return sizeof(sockaddr_in);
+        case AF_INET6: return sizeof(sockaddr_in6);
+        default:       return sizeof(ss);
+    }
+}
+
+inline std::string to_string(const struct sockaddr_storage& ss) noexcept {
+    std::stringstream str{};
+
+    char hbuf[NI_MAXHOST]{};
+    char sbuf[NI_MAXSERV]{};
+    switch (ss.ss_family) {
+        case AF_INET:
+        case AF_INET6: {
+            ::getnameinfo(sockaddr_ptr(ss), socklen(ss),
+                          hbuf, sizeof(hbuf),
+                          sbuf, sizeof(sbuf),
+                          (NI_NUMERICHOST | NI_NUMERICSERV));
+            break;
+        }
+
+        default:
+            str << "unknown address family: " << ss.ss_family;
+            return str.str();
+    }
+
+    if (ss.ss_family == AF_INET6) { str << "["; }
+    str << hbuf;
+    if (ss.ss_family == AF_INET6) { str << "]"; }
+    str << ":" << sbuf;
+
+    return str.str();
+}
+
 
 struct Socket {
     Socket() = default;
@@ -32,17 +83,27 @@ struct Socket {
     Socket(const Socket&) = delete;
     Socket(Socket&& other) {
         fd = std::exchange(other.fd, -1);
+        std::swap(at_exit, other.at_exit);
     }
 
-    ~Socket() { if (fd > -1) ::close(fd); }
+    ~Socket() {
+        if (fd > -1) {
+            for (auto& cleanup : at_exit) {
+                cleanup();
+            }
+            ::close(fd);
+        }
+    }
 
     Socket& operator=(const Socket&) = delete;
     Socket& operator=(Socket&& other) {
         fd = std::exchange(other.fd, -1);
+        std::swap(at_exit, other.at_exit);
         return *this;
     }
 
     int fd{-1};
+    std::vector<std::function<void(void)>> at_exit{};
 };
 
 inline error::Errno enable(Socket& s, int optlvl, int optname) {
@@ -100,53 +161,60 @@ inline ErrorOr<mcast::socket::Socket> makeIPv6() {
     return s;
 }
 
-struct Message {
+
+struct Msg {
     struct sockaddr_storage ss{};
     uint8_t cmsg[256]{};
-    uint8_t pckt[1500]{};
+    uint8_t pckt[2048 - sizeof(ss) - sizeof(cmsg)]{};
+};
 
-    struct sockaddr* sockaddr_ptr() noexcept {
-        return reinterpret_cast<struct sockaddr*>(&ss);
-    }
+static_assert(sizeof(struct Msg) == 2048);
 
-    const struct sockaddr* sockaddr_ptr() const noexcept {
-        return reinterpret_cast<const struct sockaddr*>(&ss);
-    }
 
-    socklen_t socklen() const noexcept {
-        switch (ss.ss_family) {
-            case AF_INET:  return sizeof(sockaddr_in);
-            case AF_INET6: return sizeof(sockaddr_in6);
-            default:       return sizeof(ss);
-        }
+struct MsgIO {
+    struct msghdr mhdr{};
+    struct iovec iov[1];
+
+    static MsgIO from(Msg& m) {
+        MsgIO mio{};
+
+        mio.iov[0].iov_base = m.pckt;
+        mio.iov[0].iov_len = sizeof(m.pckt);
+
+        mio.mhdr.msg_name = &(m.ss);
+        mio.mhdr.msg_namelen = sizeof(m.ss);
+        mio.mhdr.msg_iov = mio.iov;
+        mio.mhdr.msg_iovlen = 1;
+        mio.mhdr.msg_control = m.cmsg;
+        mio.mhdr.msg_controllen = sizeof(m.cmsg);
+        mio.mhdr.msg_flags = 0;
+
+        return mio;
     }
 };
 
-inline ErrorOr<ssize_t> recvmsg(Socket& s, Message& m) {
+
+inline ErrorOr<ssize_t> recvmsg(Socket& s, Msg& m) {
     memset(&m, 0, sizeof(m));
     m.ss.ss_family = AF_UNSPEC;
-
-    struct iovec iov[1];
-    iov[0].iov_base = m.pckt;
-    iov[0].iov_len = sizeof(m.pckt);
-
-    struct msghdr mhdr{};
-    mhdr.msg_name = &(m.ss);
-    mhdr.msg_namelen = sizeof(m.ss);
-    mhdr.msg_iov = iov;
-    mhdr.msg_iovlen = 1;
-    mhdr.msg_control = m.cmsg;
-    mhdr.msg_controllen = sizeof(m.cmsg);
-    mhdr.msg_flags = 0;
+    auto mio{MsgIO::from(m)};
 
     error::clear();
-
-    const ssize_t rval = ::recvmsg(s.fd, &mhdr, 0);
+    const ssize_t rval = ::recvmsg(s.fd, &(mio.mhdr), 0);
     if (rval < 0) {
         return error::current();
     }
     return rval;
 }
+
+
+struct AuxiliaryData {
+    std::variant<std::monostate, struct ip_mreqn, struct ipv6_mreq> mreq{};
+
+    bool has_mreq() const noexcept {
+        return not std::holds_alternative<std::monostate>(mreq);
+    }
+};
 
 }  // namespace socket
 }  // namespace mcast

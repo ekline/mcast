@@ -77,9 +77,13 @@ int main(int argc, char * argv[]) {
         }
     }
 
+    s.at_exit.push_back([&s, mc_group]() mutable {
+        socket::set(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, mc_group);
+    });
+
     std::cerr << "Listening...\n";
 
-    socket::Message msg{};
+    socket::Msg msg{};
     while (true) {
         const auto rval = socket::recvmsg(s, msg);
         if (not ok(rval)) {

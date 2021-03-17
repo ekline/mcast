@@ -18,6 +18,7 @@ PROG := mcast
 $(PROG): main.o
 	$(CXX) $(CXX_FLAGS) -o $@ $^
 
+.PHONY: clean
 clean:
 	rm -f *.o $(PROG)
 

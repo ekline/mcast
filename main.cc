@@ -10,8 +10,6 @@
 
 LICENSE_END */
 
-#include <arpa/inet.h>
-#include <netdb.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -42,8 +40,90 @@ enum class Mode {
     CLIENT
 };
 
+error::Errno prepareListeningSocket(socket::Socket& s,
+                                    const struct sockaddr_storage& mc_dest) {
+    auto e = socket::enable(s, SOL_SOCKET, SO_REUSEADDR);
+    if (not error::ok(e)) return e;
+    e = socket::enable(s, SOL_SOCKET, SO_REUSEPORT);
+    if (not error::ok(e)) return e;
+
+    switch (mc_dest.ss_family) {
+        case AF_INET: {
+            struct ip_mreqn mc_group{
+                socket::sockaddr_in_ptr(mc_dest)->sin_addr,
+                { INADDR_ANY },
+                0,
+            };
+
+            struct sockaddr_in listen4{};
+            listen4.sin_family = AF_INET;
+            listen4.sin_addr = { INADDR_ANY };
+            listen4.sin_port = socket::sockaddr_in_ptr(mc_dest)->sin_port;
+
+            for (const auto& e :
+                    {
+                        socket::enable(s, IPPROTO_IP, IP_RECVTOS),
+                        socket::enable(s, IPPROTO_IP, IP_RECVTTL),
+                        socket::enable(s, IPPROTO_IP, IP_PKTINFO),
+                        socket::enable(s, IPPROTO_IP, IP_MULTICAST_LOOP),
+#ifdef IP_MULTICAST_ALL  // not available on macOS
+                        socket::disable(s, IPPROTO_IP, IP_MULTICAST_ALL),
+#endif
+                        socket::set(s, IPPROTO_IP, IP_MULTICAST_TTL, 4),
+                        socket::set(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, mc_group),
+                        socket::bind(s, listen4)
+                    }) {
+                if (not error::ok(e)) {
+                    return e;
+                }
+            }
+
+            s.at_exit.push_back([&s, mc_group]() mutable {
+                socket::set(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, mc_group);
+            });
+            return error::OK();
+        }
+        case AF_INET6: {
+            struct ipv6_mreq mc_group{
+                socket::sockaddr_in6_ptr(mc_dest)->sin6_addr,
+                0,
+            };
+
+            struct sockaddr_in6 listen6{};
+            listen6.sin6_family = AF_INET6;
+            listen6.sin6_addr = in6addr_any;
+            listen6.sin6_port = socket::sockaddr_in6_ptr(mc_dest)->sin6_port;
+
+            for (const auto& e :
+                    {
+                        socket::enable(s, IPPROTO_IPV6, IPV6_RECVTCLASS),
+                        socket::enable(s, IPPROTO_IPV6, IPV6_RECVHOPLIMIT),
+                        socket::enable(s, IPPROTO_IPV6, IPV6_RECVPKTINFO),
+                        socket::enable(s, IPPROTO_IPV6, IPV6_MULTICAST_LOOP),
+#ifdef IPV6_MULTICAST_ALL  // not available on macOS
+                        socket::disable(s, IPPROTO_IPV6, IPV6_MULTICAST_ALL),
+#endif
+                        socket::set(s, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, 4),
+                        socket::set(s, IPPROTO_IPV6, IPV6_JOIN_GROUP, mc_group),
+                        socket::bind(s, listen6)
+                    }) {
+                if (not error::ok(e)) {
+                    return e;
+                }
+            }
+
+            s.at_exit.push_back([&s, mc_group]() mutable {
+                socket::set(s, IPPROTO_IPV6, IPV6_LEAVE_GROUP, mc_group);
+            });
+            return error::OK();
+        }
+        default:
+            return error::Errno{EAFNOSUPPORT};
+    }
+}
+
 int main(int argc, char * argv[]) {
-    auto mc_dest{socket::from_string("239.255.255.251")};
+    auto mc_dest_or{socket::from_string("239.255.255.251")};
     in_port_t port = 10101;
     // const int mtu = 1500;
     Mode mode{Mode::LISTEN};
@@ -58,7 +138,7 @@ int main(int argc, char * argv[]) {
                 mode = Mode::LISTEN;
                 break;
             case 'g':
-                mc_dest = socket::from_string(optarg);
+                mc_dest_or = socket::from_string(optarg);
                 break;
             case 'p': {
                 const int specified_port{atoi(optarg)};
@@ -78,58 +158,28 @@ int main(int argc, char * argv[]) {
     argc -= optind;
     argv += optind;
 
-    if (not ok(mc_dest)) {
-        std::cerr << gai_strerror(get_error(mc_dest).num) << "\n";
+    if (not ok(mc_dest_or)) {
+        std::cerr << gai_strerror(get_error(mc_dest_or).num) << "\n";
         exit(-1);
     }
+    auto mc_dest{get_valueref_unsafe(mc_dest_or)};
+    socket::set_port(mc_dest, port);
 
-    auto mc_dest_saddr{get_valueref_unsafe(mc_dest)};
-    auto socket_or{socket::makeForFamily(mc_dest_saddr.ss_family)};
+    auto socket_or{socket::makeForFamily(mc_dest.ss_family)};
     if (not ok(socket_or)) {
         std::cerr << to_string(socket_or);
         exit(-1);
     }
-
-    struct ip_mreqn mc_group{
-        socket::sockaddr_in_ptr(mc_dest_saddr)->sin_addr,
-        { INADDR_ANY },
-        0,
-    };
-
-    struct sockaddr_in listen4{};
-    listen4.sin_family = AF_INET;
-    listen4.sin_addr = { INADDR_ANY };
-    listen4.sin_port = htons(port);
-
     auto& s{get_valueref_unsafe(socket_or)};
 
-    for (const auto& e :
-            {
-                socket::enable(s, SOL_SOCKET, SO_REUSEADDR),
-                socket::enable(s, SOL_SOCKET, SO_REUSEPORT),
-                socket::enable(s, IPPROTO_IP, IP_RECVTOS),
-                socket::enable(s, IPPROTO_IP, IP_RECVTTL),
-                socket::enable(s, IPPROTO_IP, IP_PKTINFO),
-#ifdef IP_MULTICAST_ALL  // not available on macOS
-                socket::disable(s, IPPROTO_IP, IP_MULTICAST_ALL),
-#endif
-                socket::disable(s, IPPROTO_IP, IP_MULTICAST_LOOP),
-                socket::set(s, IPPROTO_IP, IP_MULTICAST_TTL, 4),
-                socket::set(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, mc_group),
-                socket::bind(s, listen4)
-            }) {
-        if (not error::ok(e)) {
-            std::cerr << error::to_string(e);
-            exit(-1);
-        }
-    }
-
-    s.at_exit.push_back([&s, mc_group]() mutable {
-        socket::set(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, mc_group);
-    });
 
     switch (mode) {
         case Mode::LISTEN: {
+            auto e = prepareListeningSocket(s, mc_dest);
+            if (not error::ok(e)) {
+                std::cerr << error::to_string(e);
+                exit(-1);
+            }
             std::cerr << "Listening...\n";
 
             socket::Msg msg{};

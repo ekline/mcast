@@ -24,6 +24,8 @@ struct Errno {
     int num{0};
 };
 
+inline constexpr Errno OK() noexcept { return Errno{0}; }
+
 inline bool ok(const Errno& e) noexcept {
     return (e.num == 0);
 }

@@ -13,6 +13,8 @@ LICENSE_END */
 #ifndef MCAST_SOCKET_H
 #define MCAST_SOCKET_H
 
+#define __APPLE_USE_RFC_3542
+
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdint.h>
@@ -125,6 +127,19 @@ inline ErrorOr<struct sockaddr_storage> from_string(const char* ip_literal) {
     }
 
     return error::Errno{rval};
+}
+
+inline error::Errno set_port(struct sockaddr_storage& ss, in_port_t port) {
+    switch (ss.ss_family) {
+        case AF_INET:
+            sockaddr_in_ptr(ss)->sin_port = htons(port);
+            return error::OK();
+        case AF_INET6:
+            sockaddr_in6_ptr(ss)->sin6_port = htons(port);
+            return error::OK();
+        default:
+            return error::Errno{EAFNOSUPPORT};
+    }
 }
 
 

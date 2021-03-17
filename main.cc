@@ -108,7 +108,7 @@ error::Error prepareListenSocket(socket::Socket& s,
             s.at_exit.push_back([&s, mc_group]() mutable {
                 socket::set(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, mc_group);
             });
-            return error::OK();
+            return error::success();
         }
 
         case AF_INET6: {
@@ -142,7 +142,7 @@ error::Error prepareListenSocket(socket::Socket& s,
             s.at_exit.push_back([&s, mc_group]() mutable {
                 socket::set(s, IPPROTO_IPV6, IPV6_LEAVE_GROUP, mc_group);
             });
-            return error::OK();
+            return error::success();
         }
 
         default:
@@ -170,7 +170,7 @@ error::Error prepareClientSocket(socket::Socket& s,
                 }
             }
 
-            return error::OK();
+            return error::success();
         }
 
         case AF_INET6: {
@@ -190,7 +190,7 @@ error::Error prepareClientSocket(socket::Socket& s,
                 }
             }
 
-            return error::OK();
+            return error::success();
         }
 
         default:
@@ -205,13 +205,18 @@ int main(int argc, char * argv[]) {
     Mode mode{Mode::LISTEN};
 
     int ch{-1};
-    while ((ch = getopt(argc, argv, "cg:lm:p:")) != -1) {
+    while ((ch = getopt(argc, argv, "cg:hlm:p:?")) != -1) {
         switch (ch) {
             case 'c':
                 mode = Mode::CLIENT;
                 break;
             case 'g':
                 mc_dest_or = socket::from_string(optarg);
+                break;
+            case 'h':
+            case '?':
+                usage(argv[0]);
+                exit(EXIT_SUCCESS);
                 break;
             case 'l':
                 mode = Mode::LISTEN;
@@ -222,7 +227,7 @@ int main(int argc, char * argv[]) {
                     mtu = specified_mtu;
                 } else {
                     std::cerr << "specified MTU invalid or out of range\n";
-                    exit(-1);
+                    exit(EXIT_FAILURE);
                 }
                 break;
             }
@@ -232,13 +237,13 @@ int main(int argc, char * argv[]) {
                     port = specified_port;
                 } else {
                     std::cerr << "specified port invalid or out of range\n";
-                    exit(-1);
+                    exit(EXIT_FAILURE);
                 }
                 break;
             }
             default:
                 usage(argv[0]);
-                exit(-1);
+                exit(EXIT_FAILURE);
         }
     }
     argc -= optind;
@@ -246,7 +251,7 @@ int main(int argc, char * argv[]) {
 
     if (not ok(mc_dest_or)) {
         std::cerr << to_string(mc_dest_or) << "\n";
-        exit(-1);
+        exit(EXIT_FAILURE);
     }
     auto mc_dest{get_valueref_unsafe(mc_dest_or)};
     socket::set_port(mc_dest, port);
@@ -257,7 +262,7 @@ int main(int argc, char * argv[]) {
     auto socket_or{socket::makeForFamily(mc_dest.ss_family)};
     if (not ok(socket_or)) {
         std::cerr << to_string(socket_or);
-        exit(-1);
+        exit(EXIT_FAILURE);
     }
     auto& s{get_valueref_unsafe(socket_or)};
 
@@ -266,7 +271,7 @@ int main(int argc, char * argv[]) {
             auto e = prepareListenSocket(s, mc_dest);
             if (not error::ok(e)) {
                 std::cerr << error::to_string(e);
-                exit(-1);
+                exit(EXIT_FAILURE);
             }
             std::cerr << "listening...\n";
 
@@ -286,7 +291,7 @@ int main(int argc, char * argv[]) {
             auto e = prepareClientSocket(s, mc_dest);
             if (not error::ok(e)) {
                 std::cerr << error::to_string(e);
-                exit(-1);
+                exit(EXIT_FAILURE);
             }
             std::cerr << "copying from stdin to multicast sendmsg\n";
 

@@ -32,7 +32,7 @@ struct Error {
     Category category{Category::ERRNO};
 };
 
-inline constexpr Error OK() noexcept { return Error{0}; }
+inline constexpr Error success() noexcept { return Error{0}; }
 
 inline bool ok(const Error& e) noexcept {
     return (e.num == 0);
@@ -67,7 +67,7 @@ error::Error get_error(const ErrorOr<T>& e) noexcept {
     if (std::holds_alternative<mcast::error::Error>(e)) {
         return *(std::get_if<mcast::error::Error>(&e));
     }
-    return error::OK();
+    return error::success();
 }
 
 template<typename T>

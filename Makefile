@@ -15,6 +15,9 @@ CXX_FLAGS := --std=c++17 -Werror -Wall
 
 PROG := mcast
 
+.PHONY: ab_ovo
+ab_ovo: clean $(PROG)
+
 $(PROG): main.o
 	$(CXX) $(CXX_FLAGS) -o $@ $^
 

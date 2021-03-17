@@ -133,10 +133,10 @@ inline error::Error set_port(struct sockaddr_storage& ss, in_port_t port) {
     switch (ss.ss_family) {
         case AF_INET:
             sockaddr_in_ptr(ss)->sin_port = htons(port);
-            return error::OK();
+            return error::success();
         case AF_INET6:
             sockaddr_in6_ptr(ss)->sin6_port = htons(port);
-            return error::OK();
+            return error::success();
         default:
             return error::Error{EAFNOSUPPORT};
     }

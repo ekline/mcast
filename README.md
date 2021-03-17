@@ -2,7 +2,6 @@
 
 ```
 bash$ ./mcast -h
-./mcast: illegal option -- h
 Usage: ./mcast
     [-g multicast_group]
     [-p port]

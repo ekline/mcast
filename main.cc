@@ -25,22 +25,44 @@ LICENSE_END */
 using namespace mcast;
 
 void usage(const char *argv0) {
-    std::cerr << "Usage: " << argv0 << "\n"
-              << "    " << "[-g multicast_group]\n"
-              << "    " << "[-p port]\n"
-              << "    " << "[-l|-c]  # mode: listen|client\n"
-              << "\n"
-              << "Examples:\n"
-              << "    " << "-g 224.0.0.251 -p 5353       # IPv4 mDNS\n"
-              << "    " << "-g ff02::fb -p 5353          # IPv6 mDNS\n"
-              << "    " << "-g 239.255.255.251 -p 10101  # google cast\n"
-              << "\n";
+    const std::string space{"    "};
+
+    std::cerr
+        << "Usage: " << argv0 << "\n"
+        << space << "[-g multicast_group]\n"
+        << space << "[-p port]\n"
+        << space << "[-m ip_mtu]  # including headers; client mode only\n"
+        << space << "[-l|-c]      # mode: listen (default)|client\n"
+        << "\n"
+        << "Examples:\n"
+        << space << "-g 224.0.0.251 -p 5353       # IPv4 mDNS\n"
+        << space << "-g ff02::fb -p 5353          # IPv6 mDNS\n"
+        << space << "-g 239.255.255.251 -p 10101  # google cast debug\n"
+        << "\n";
 }
 
 enum class Mode {
     LISTEN,
     CLIENT
 };
+
+int adjust_mtu(int mtu, int addr_family) {
+    switch (addr_family) {
+        case AF_INET:
+            mtu = std::max(576, mtu);
+            mtu = std::min(1500, mtu);
+            mtu -= 20;  // IPv4
+            break;
+        default:
+            mtu = std::max(1280, mtu);
+            mtu = std::min(1500, mtu);
+            mtu -= 40;  // IPv6
+            break;
+    }
+
+    mtu -= 8;  // UDP
+    return mtu;
+}
 
 error::Error prepareListeningSocket(socket::Socket& s,
                                     const struct sockaddr_storage& mc_dest) {
@@ -129,25 +151,35 @@ error::Error prepareListeningSocket(socket::Socket& s,
 int main(int argc, char * argv[]) {
     auto mc_dest_or{socket::from_string("239.255.255.251")};
     in_port_t port = 10101;
-    // const int mtu = 1500;
+    int mtu = 1500;
     Mode mode{Mode::LISTEN};
 
     int ch{-1};
-    while ((ch = getopt(argc, argv, "clg:p:")) != -1) {
+    while ((ch = getopt(argc, argv, "cg:lm:p:")) != -1) {
         switch (ch) {
             case 'c':
                 mode = Mode::CLIENT;
                 break;
-            case 'l':
-                mode = Mode::LISTEN;
-                break;
             case 'g':
                 mc_dest_or = socket::from_string(optarg);
                 break;
+            case 'l':
+                mode = Mode::LISTEN;
+                break;
+            case 'm': {
+                const int specified_mtu{atoi(optarg)};
+                if (specified_mtu > 0 && specified_mtu <= 1500) {
+                    mtu = specified_mtu;
+                } else {
+                    std::cerr << "specified MTU invalid or out of range\n";
+                    exit(-1);
+                }
+                break;
+            }
             case 'p': {
                 const int specified_port{atoi(optarg)};
                 if (specified_port > 0 && specified_port <= 0xffff) {
-                    port = atoi(optarg);
+                    port = specified_port;
                 } else {
                     std::cerr << "specified port invalid or out of range\n";
                     exit(-1);
@@ -169,13 +201,15 @@ int main(int argc, char * argv[]) {
     auto mc_dest{get_valueref_unsafe(mc_dest_or)};
     socket::set_port(mc_dest, port);
 
+    mtu = adjust_mtu(mtu, mc_dest.ss_family);
+    std::cerr << "application-layer MTU: " << mtu << "\n";
+
     auto socket_or{socket::makeForFamily(mc_dest.ss_family)};
     if (not ok(socket_or)) {
         std::cerr << to_string(socket_or);
         exit(-1);
     }
     auto& s{get_valueref_unsafe(socket_or)};
-
 
     switch (mode) {
         case Mode::LISTEN: {

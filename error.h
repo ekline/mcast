@@ -13,6 +13,8 @@ LICENSE_END */
 #ifndef MCAST_ERROR_H
 #define MCAST_ERROR_H
 
+#include "netdb.h"
+
 #include <cerrno>
 #include <cstring>
 #include <variant>
@@ -20,13 +22,19 @@ LICENSE_END */
 namespace mcast {
 namespace error {
 
-struct Errno {
-    int num{0};
+enum class Category {
+    ERRNO,
+    ADDRINFO,
 };
 
-inline constexpr Errno OK() noexcept { return Errno{0}; }
+struct Error {
+    int num{0};
+    Category category{Category::ERRNO};
+};
 
-inline bool ok(const Errno& e) noexcept {
+inline constexpr Error OK() noexcept { return Error{0}; }
+
+inline bool ok(const Error& e) noexcept {
     return (e.num == 0);
 }
 
@@ -34,29 +42,32 @@ inline void clear() noexcept {
     errno = 0;
 }
 
-inline Errno&& current() noexcept {
-    return std::move(Errno{errno});
+inline Error&& current() noexcept {
+    return std::move(Error{errno});
 }
 
-inline Errno&& from(int rval) noexcept {
-    return std::move(Errno{(rval == 0) ? 0 : errno});
+inline Error&& from(int rval) noexcept {
+    return std::move(Error{(rval == 0) ? 0 : errno});
 }
 
-inline const char* to_string(const Errno& e) {
-    return std::strerror(e.num);
+inline const char* to_string(const Error& e) {
+    switch (e.category) {
+        case Category::ERRNO: return std::strerror(e.num);
+        case Category::ADDRINFO: return ::gai_strerror(e.num);
+    }
 }
 
 }  // namespace error
 
 template<typename T>
-using ErrorOr = std::variant<mcast::error::Errno, T>;
+using ErrorOr = std::variant<mcast::error::Error, T>;
 
 template<typename T>
-error::Errno get_error(const ErrorOr<T>& e) noexcept {
-    if (std::holds_alternative<mcast::error::Errno>(e)) {
-        return *(std::get_if<mcast::error::Errno>(&e));
+error::Error get_error(const ErrorOr<T>& e) noexcept {
+    if (std::holds_alternative<mcast::error::Error>(e)) {
+        return *(std::get_if<mcast::error::Error>(&e));
     }
-    return error::Errno{};
+    return error::OK();
 }
 
 template<typename T>

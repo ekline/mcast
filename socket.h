@@ -126,10 +126,10 @@ inline ErrorOr<struct sockaddr_storage> from_string(const char* ip_literal) {
         return ss;
     }
 
-    return error::Errno{rval};
+    return error::Error{rval, error::Category::ADDRINFO};
 }
 
-inline error::Errno set_port(struct sockaddr_storage& ss, in_port_t port) {
+inline error::Error set_port(struct sockaddr_storage& ss, in_port_t port) {
     switch (ss.ss_family) {
         case AF_INET:
             sockaddr_in_ptr(ss)->sin_port = htons(port);
@@ -138,7 +138,7 @@ inline error::Errno set_port(struct sockaddr_storage& ss, in_port_t port) {
             sockaddr_in6_ptr(ss)->sin6_port = htons(port);
             return error::OK();
         default:
-            return error::Errno{EAFNOSUPPORT};
+            return error::Error{EAFNOSUPPORT};
     }
 }
 
@@ -172,14 +172,14 @@ struct Socket {
     std::vector<std::function<void(void)>> at_exit{};
 };
 
-inline error::Errno enable(Socket& s, int optlvl, int optname) {
+inline error::Error enable(Socket& s, int optlvl, int optname) {
     error::clear();
 
     const int on{1};
     return error::from(::setsockopt(s.fd, optlvl, optname, &on, sizeof(on)));
 }
 
-inline error::Errno disable(Socket& s, int optlvl, int optname) {
+inline error::Error disable(Socket& s, int optlvl, int optname) {
     error::clear();
 
     const int off{0};
@@ -187,19 +187,19 @@ inline error::Errno disable(Socket& s, int optlvl, int optname) {
 }
 
 template<typename T>
-inline error::Errno set(Socket& s, int optlvl, int optname, const T& t) {
+inline error::Error set(Socket& s, int optlvl, int optname, const T& t) {
     error::clear();
 
     return error::from(::setsockopt(s.fd, optlvl, optname, &t, sizeof(T)));
 }
 
-inline error::Errno bind(Socket& s, const struct sockaddr_in& sin) {
+inline error::Error bind(Socket& s, const struct sockaddr_in& sin) {
     return error::from(::bind(s.fd,
                               reinterpret_cast<const struct sockaddr*>(&sin),
                               sizeof(struct sockaddr_in)));
 }
 
-inline error::Errno bind(Socket& s, const struct sockaddr_in6& sin6) {
+inline error::Error bind(Socket& s, const struct sockaddr_in6& sin6) {
     return error::from(::bind(s.fd,
                               reinterpret_cast<const struct sockaddr*>(&sin6),
                               sizeof(struct sockaddr_in6)));
@@ -231,7 +231,7 @@ inline ErrorOr<mcast::socket::Socket> makeForFamily(int addr_family) {
     switch (addr_family) {
         case AF_INET: return makeIPv4();
         case AF_INET6: return makeIPv6();
-        default: return error::Errno{EAFNOSUPPORT};
+        default: return error::Error{EAFNOSUPPORT};
     }
 }
 

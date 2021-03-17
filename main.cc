@@ -10,6 +10,8 @@
 
 LICENSE_END */
 
+#define __APPLE_USE_RFC_3542
+
 #include <unistd.h>
 
 #include <iostream>
@@ -40,7 +42,7 @@ enum class Mode {
     CLIENT
 };
 
-error::Errno prepareListeningSocket(socket::Socket& s,
+error::Error prepareListeningSocket(socket::Socket& s,
                                     const struct sockaddr_storage& mc_dest) {
     auto e = socket::enable(s, SOL_SOCKET, SO_REUSEADDR);
     if (not error::ok(e)) return e;
@@ -120,7 +122,7 @@ error::Errno prepareListeningSocket(socket::Socket& s,
         }
 
         default:
-            return error::Errno{EAFNOSUPPORT};
+            return error::Error{EAFNOSUPPORT};
     }
 }
 
@@ -161,7 +163,7 @@ int main(int argc, char * argv[]) {
     argv += optind;
 
     if (not ok(mc_dest_or)) {
-        std::cerr << gai_strerror(get_error(mc_dest_or).num) << "\n";
+        std::cerr << to_string(mc_dest_or) << "\n";
         exit(-1);
     }
     auto mc_dest{get_valueref_unsafe(mc_dest_or)};

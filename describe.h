@@ -38,7 +38,7 @@ std::string describe(const socket::Msg msg, ssize_t rcvd) {
 
     const int bytes_per_line{16};
     char buf[3]{};
-    for (int i = 0; i < rcvd; i++) {
+    for (int i = 0; i < rcvd; i += bytes_per_line) {
         if (i == 0) str << "\n" << indent_short << "data:";
         str << "\n";
 
@@ -70,8 +70,6 @@ std::string describe(const socket::Msg msg, ssize_t rcvd) {
             buf[1] = '\0';
             str << buf;
         }
-
-        i += bytes_per_line;
     }
 
     str << "\n";

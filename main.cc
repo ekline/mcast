@@ -83,6 +83,7 @@ error::Errno prepareListeningSocket(socket::Socket& s,
             });
             return error::OK();
         }
+
         case AF_INET6: {
             struct ipv6_mreq mc_group{
                 socket::sockaddr_in6_ptr(mc_dest)->sin6_addr,
@@ -117,6 +118,7 @@ error::Errno prepareListeningSocket(socket::Socket& s,
             });
             return error::OK();
         }
+
         default:
             return error::Errno{EAFNOSUPPORT};
     }

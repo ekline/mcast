@@ -205,6 +205,24 @@ inline error::Error bind(Socket& s, const struct sockaddr_in6& sin6) {
                               sizeof(struct sockaddr_in6)));
 }
 
+inline error::Error connect(Socket& s, const struct sockaddr_in& sin) {
+    return error::from(
+                ::connect(s.fd,
+                          reinterpret_cast<const struct sockaddr*>(&sin),
+                          sizeof(struct sockaddr_in)));
+}
+
+inline error::Error connect(Socket& s, const struct sockaddr_in6& sin6) {
+    return error::from(
+                ::connect(s.fd,
+                          reinterpret_cast<const struct sockaddr*>(&sin6),
+                          sizeof(struct sockaddr_in6)));
+}
+
+inline error::Error connect(Socket& s, const struct sockaddr_storage& ss) {
+    return error::from(::connect(s.fd, sockaddr_ptr(ss), socklen(ss)));
+}
+
 inline ErrorOr<mcast::socket::Socket> makeIPv4() {
     const int fd{::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)};
     if (fd < 0) {
@@ -275,6 +293,23 @@ inline ErrorOr<ssize_t> recvmsg(Socket& s, Msg& m) {
 
     error::clear();
     const ssize_t rval = ::recvmsg(s.fd, &(mio.mhdr), 0);
+    if (rval < 0) {
+        return error::current();
+    }
+    return rval;
+}
+
+inline ErrorOr<ssize_t> sendmsg(Socket& s, Msg& m, size_t len) {
+    auto mio{MsgIO::from(m)};
+    if (m.ss.ss_family == AF_UNSPEC) {
+        // No destination address; hopefully the socket is connect()d.
+        mio.mhdr.msg_name = nullptr;
+        mio.mhdr.msg_namelen = 0;
+    }
+    mio.iov[0].iov_len = std::min(len, mio.iov[0].iov_len);
+
+    error::clear();
+    const ssize_t rval = ::sendmsg(s.fd, &(mio.mhdr), 0);
     if (rval < 0) {
         return error::current();
     }

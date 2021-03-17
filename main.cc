@@ -12,6 +12,7 @@ LICENSE_END */
 
 #define __APPLE_USE_RFC_3542
 
+#include <stdio.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -47,15 +48,18 @@ enum class Mode {
 };
 
 int adjust_mtu(int mtu, int addr_family) {
+    // Basic bounds checking.
+    if (mtu < 0) mtu = 0;
+    mtu = std::min(sizeof(socket::Msg::pckt), static_cast<size_t>(mtu));
+    mtu = std::min(1500, mtu);
+
     switch (addr_family) {
         case AF_INET:
             mtu = std::max(576, mtu);
-            mtu = std::min(1500, mtu);
             mtu -= 20;  // IPv4
             break;
         default:
             mtu = std::max(1280, mtu);
-            mtu = std::min(1500, mtu);
             mtu -= 40;  // IPv6
             break;
     }
@@ -64,8 +68,8 @@ int adjust_mtu(int mtu, int addr_family) {
     return mtu;
 }
 
-error::Error prepareListeningSocket(socket::Socket& s,
-                                    const struct sockaddr_storage& mc_dest) {
+error::Error prepareListenSocket(socket::Socket& s,
+                                 const struct sockaddr_storage& mc_dest) {
     auto e = socket::enable(s, SOL_SOCKET, SO_REUSEADDR);
     if (not error::ok(e)) return e;
     e = socket::enable(s, SOL_SOCKET, SO_REUSEPORT);
@@ -93,7 +97,6 @@ error::Error prepareListeningSocket(socket::Socket& s,
 #ifdef IP_MULTICAST_ALL  // not available on macOS
                         socket::disable(s, IPPROTO_IP, IP_MULTICAST_ALL),
 #endif
-                        socket::set(s, IPPROTO_IP, IP_MULTICAST_TTL, 4),
                         socket::set(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, mc_group),
                         socket::bind(s, listen4)
                     }) {
@@ -128,7 +131,6 @@ error::Error prepareListeningSocket(socket::Socket& s,
 #ifdef IPV6_MULTICAST_ALL  // not available on macOS
                         socket::disable(s, IPPROTO_IPV6, IPV6_MULTICAST_ALL),
 #endif
-                        socket::set(s, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, 4),
                         socket::set(s, IPPROTO_IPV6, IPV6_JOIN_GROUP, mc_group),
                         socket::bind(s, listen6)
                     }) {
@@ -140,6 +142,54 @@ error::Error prepareListeningSocket(socket::Socket& s,
             s.at_exit.push_back([&s, mc_group]() mutable {
                 socket::set(s, IPPROTO_IPV6, IPV6_LEAVE_GROUP, mc_group);
             });
+            return error::OK();
+        }
+
+        default:
+            return error::Error{EAFNOSUPPORT};
+    }
+}
+
+error::Error prepareClientSocket(socket::Socket& s,
+                                 const struct sockaddr_storage& mc_dest) {
+    switch (mc_dest.ss_family) {
+        case AF_INET: {
+            struct sockaddr_in client4{};
+            client4.sin_family = AF_INET;
+            client4.sin_addr = { INADDR_ANY };
+            client4.sin_port = 0;
+
+            for (const auto& e :
+                    {
+                        socket::set(s, IPPROTO_IP, IP_MULTICAST_TTL, 4),
+                        socket::bind(s, client4),
+                        socket::connect(s, mc_dest),
+                    }) {
+                if (not error::ok(e)) {
+                    return e;
+                }
+            }
+
+            return error::OK();
+        }
+
+        case AF_INET6: {
+            struct sockaddr_in6 client6{};
+            client6.sin6_family = AF_INET6;
+            client6.sin6_addr = in6addr_any;
+            client6.sin6_port = 0;
+
+            for (const auto& e :
+                    {
+                        socket::set(s, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, 4),
+                        socket::bind(s, client6),
+                        socket::connect(s, mc_dest),
+                    }) {
+                if (not error::ok(e)) {
+                    return e;
+                }
+            }
+
             return error::OK();
         }
 
@@ -213,12 +263,12 @@ int main(int argc, char * argv[]) {
 
     switch (mode) {
         case Mode::LISTEN: {
-            auto e = prepareListeningSocket(s, mc_dest);
+            auto e = prepareListenSocket(s, mc_dest);
             if (not error::ok(e)) {
                 std::cerr << error::to_string(e);
                 exit(-1);
             }
-            std::cerr << "Listening...\n";
+            std::cerr << "listening...\n";
 
             socket::Msg msg{};
             while (true) {
@@ -231,8 +281,28 @@ int main(int argc, char * argv[]) {
             }
             break;
         }
+
         case Mode::CLIENT: {
-            std::cerr << "Client mode not yet implemented\n";
+            auto e = prepareClientSocket(s, mc_dest);
+            if (not error::ok(e)) {
+                std::cerr << error::to_string(e);
+                exit(-1);
+            }
+            std::cerr << "copying from stdin to multicast sendmsg\n";
+
+            socket::Msg msg{};
+            while (true) {
+                const auto consumed{fread(msg.pckt, 1, mtu, stdin)};
+                if (consumed == 0) {
+                    break;
+                }
+                const auto rval = socket::sendmsg(s, msg, consumed);
+                if (not ok(rval)) {
+                    std::cerr << to_string(rval);
+                }
+
+                std::cerr << "sent " << consumed << " bytes\n";
+            }
             break;
         }
     }

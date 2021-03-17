@@ -40,6 +40,34 @@ sockaddr_ptr(const struct sockaddr_storage& ss) noexcept {
     return reinterpret_cast<const struct sockaddr*>(&ss);
 }
 
+inline struct sockaddr_in*
+sockaddr_in_ptr(struct sockaddr_storage& ss) noexcept {
+    return (ss.ss_family == AF_INET)
+        ? reinterpret_cast<struct sockaddr_in*>(&ss)
+        : nullptr;
+}
+
+inline const struct sockaddr_in*
+sockaddr_in_ptr(const struct sockaddr_storage& ss) noexcept {
+    return (ss.ss_family == AF_INET)
+        ? reinterpret_cast<const struct sockaddr_in*>(&ss)
+        : nullptr;
+}
+
+inline struct sockaddr_in6*
+sockaddr_in6_ptr(struct sockaddr_storage& ss) noexcept {
+    return (ss.ss_family == AF_INET6)
+        ? reinterpret_cast<struct sockaddr_in6*>(&ss)
+        : nullptr;
+}
+
+inline const struct sockaddr_in6*
+sockaddr_in6_ptr(const struct sockaddr_storage& ss) noexcept {
+    return (ss.ss_family == AF_INET6)
+        ? reinterpret_cast<const struct sockaddr_in6*>(&ss)
+        : nullptr;
+}
+
 inline socklen_t socklen(const struct sockaddr_storage& ss) noexcept {
     switch (ss.ss_family) {
         case AF_INET:  return sizeof(sockaddr_in);
@@ -74,6 +102,29 @@ inline std::string to_string(const struct sockaddr_storage& ss) noexcept {
     str << ":" << sbuf;
 
     return str.str();
+}
+
+inline ErrorOr<struct sockaddr_storage> from_string(const char* ip_literal) {
+    struct sockaddr_storage ss{};
+    ss.ss_family = AF_UNSPEC;
+
+    struct addrinfo *res{nullptr};
+    const struct addrinfo hints{
+        .ai_flags = AI_NUMERICHOST,
+        .ai_family = AF_UNSPEC,
+        .ai_socktype = SOCK_DGRAM,
+    };
+    const int rval = ::getaddrinfo(ip_literal, nullptr, &hints, &res);
+    if ((rval == 0) && (res != nullptr)) {
+        if (res->ai_addr != nullptr) {
+            memcpy(&ss, res->ai_addr,
+                   std::min(static_cast<size_t>(res->ai_addrlen), sizeof(ss)));
+        }
+        ::freeaddrinfo(res);
+        return ss;
+    }
+
+    return error::Errno{rval};
 }
 
 
@@ -159,6 +210,14 @@ inline ErrorOr<mcast::socket::Socket> makeIPv6() {
         return err;
     }
     return s;
+}
+
+inline ErrorOr<mcast::socket::Socket> makeForFamily(int addr_family) {
+    switch (addr_family) {
+        case AF_INET: return makeIPv4();
+        case AF_INET6: return makeIPv6();
+        default: return error::Errno{EAFNOSUPPORT};
+    }
 }
 
 

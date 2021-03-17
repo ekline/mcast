@@ -42,6 +42,7 @@ std::string describe(const socket::Msg msg, ssize_t rcvd) {
         if (i == 0) str << "\n" << indent_short << "data:";
         str << "\n";
 
+        // Print bytes as lowercase hexadecimal.
         str << indent_long;
         for (int j = 0; j < bytes_per_line; j++) {
             if (j % 2 == 0) str << " ";
@@ -56,6 +57,7 @@ std::string describe(const socket::Msg msg, ssize_t rcvd) {
             str << buf;
         }
 
+        // Print any bytes that look like printable characters.
         str << indent_long;
         for (int j = 0; j < bytes_per_line && (i + j < rcvd); j++) {
             if (j % 2 == 0) str << " ";

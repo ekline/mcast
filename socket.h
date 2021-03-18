@@ -16,16 +16,20 @@ LICENSE_END */
 #define __APPLE_USE_RFC_3542
 
 #include <netdb.h>
+#include <net/if.h>
 #include <netinet/in.h>
 #include <stdint.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <functional>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "error.h"
@@ -143,6 +147,12 @@ inline error::Error set_port(struct sockaddr_storage& ss, in_port_t port) {
 }
 
 
+inline std::string if_index2name(unsigned ifindex) {
+    char buf[IFNAMSIZ+1]{};
+    return if_indextoname(ifindex, buf);
+}
+
+
 struct Socket {
     Socket() = default;
     Socket(int sockfd) : fd((sockfd > -1) ? sockfd : -1) {}
@@ -256,11 +266,18 @@ inline ErrorOr<mcast::socket::Socket> makeForFamily(int addr_family) {
 
 struct Msg {
     struct sockaddr_storage ss{};
-    uint8_t cmsg[256]{};
+    uint8_t cmsg[128]{};
     uint8_t pckt[2048 - sizeof(ss) - sizeof(cmsg)]{};
 };
 
 static_assert(sizeof(struct Msg) == 2048);
+
+inline void clear(Msg& m) noexcept {
+    memset(&(m.ss), 0, sizeof(m.ss));
+    m.ss.ss_family = AF_UNSPEC;
+    memset(m.cmsg, 0, sizeof(m.cmsg));
+    memset(m.pckt, 0, sizeof(m.pckt));
+}
 
 
 struct MsgIO {
@@ -270,16 +287,33 @@ struct MsgIO {
     static MsgIO from(Msg& m) {
         MsgIO mio{};
 
-        mio.iov[0].iov_base = m.pckt;
-        mio.iov[0].iov_len = sizeof(m.pckt);
+        mio.iov[0].iov_base     = m.pckt;
+        mio.iov[0].iov_len      = sizeof(m.pckt);
 
-        mio.mhdr.msg_name = &(m.ss);
-        mio.mhdr.msg_namelen = sizeof(m.ss);
-        mio.mhdr.msg_iov = mio.iov;
-        mio.mhdr.msg_iovlen = 1;
-        mio.mhdr.msg_control = m.cmsg;
+        mio.mhdr.msg_name       = &(m.ss);
+        mio.mhdr.msg_namelen    = sizeof(m.ss);
+        mio.mhdr.msg_iov        = mio.iov;
+        mio.mhdr.msg_iovlen     = 1;
+        mio.mhdr.msg_control    = m.cmsg;
         mio.mhdr.msg_controllen = sizeof(m.cmsg);
-        mio.mhdr.msg_flags = 0;
+        mio.mhdr.msg_flags      = 0;
+
+        return mio;
+    }
+
+    static MsgIO from(const Msg& m) {
+        MsgIO mio{};
+
+        mio.iov[0].iov_base     = (void*)(m.pckt);
+        mio.iov[0].iov_len      = sizeof(m.pckt);
+
+        mio.mhdr.msg_name       = (void*)&(m.ss);
+        mio.mhdr.msg_namelen    = sizeof(m.ss);
+        mio.mhdr.msg_iov        = mio.iov;
+        mio.mhdr.msg_iovlen     = 1;
+        mio.mhdr.msg_control    = (void*)m.cmsg;
+        mio.mhdr.msg_controllen = sizeof(m.cmsg);
+        mio.mhdr.msg_flags      = 0;
 
         return mio;
     }
@@ -287,8 +321,7 @@ struct MsgIO {
 
 
 inline ErrorOr<ssize_t> recvmsg(Socket& s, Msg& m) {
-    memset(&m, 0, sizeof(m));
-    m.ss.ss_family = AF_UNSPEC;
+    clear(m);
     auto mio{MsgIO::from(m)};
 
     error::clear();
@@ -318,12 +351,153 @@ inline ErrorOr<ssize_t> sendmsg(Socket& s, Msg& m, size_t len) {
 
 
 struct AuxiliaryData {
-    std::variant<std::monostate, struct ip_mreqn, struct ipv6_mreq> mreq{};
-
-    bool has_mreq() const noexcept {
-        return not std::holds_alternative<std::monostate>(mreq);
-    }
+    std::optional<int> hoplimit{};
+    std::optional<int> dscp{};
+    std::variant<std::monostate,
+                 struct in_pktinfo,
+                 struct in6_pktinfo> pktinfo{};
 };
+
+inline bool has_hoplimit(const struct AuxiliaryData& aux) noexcept {
+    return aux.hoplimit.has_value();
+}
+
+inline int get_hoplimit(const struct AuxiliaryData& aux) noexcept {
+    return aux.hoplimit.value_or(-1);
+}
+
+inline void
+set_hoplimit(struct AuxiliaryData& aux, const struct cmsghdr* cmsg) noexcept {
+    if (cmsg == nullptr) return;
+
+    int received_hops{0};
+    memcpy(&received_hops, CMSG_DATA(cmsg),
+           std::min(sizeof(received_hops),
+                    static_cast<size_t>(cmsg->cmsg_len)));
+    aux.hoplimit = received_hops & 0xff;
+}
+
+inline bool has_dscp(const struct AuxiliaryData& aux) noexcept {
+    return aux.dscp.has_value();
+}
+inline int get_dscp(const struct AuxiliaryData& aux) noexcept {
+    return aux.dscp.value_or(-1);
+}
+
+inline void
+set_dscp(struct AuxiliaryData& aux, const struct cmsghdr* cmsg) noexcept {
+    if (cmsg == nullptr) return;
+
+    int received_dscp{0};
+    memcpy(&received_dscp, CMSG_DATA(cmsg),
+           std::min(sizeof(received_dscp),
+                    static_cast<size_t>(cmsg->cmsg_len)));
+    aux.dscp = received_dscp & 0xff;
+}
+
+inline bool has_pktinfo(const struct AuxiliaryData& aux) noexcept {
+    return not std::holds_alternative<std::monostate>(aux.pktinfo);
+}
+
+inline unsigned get_pktinfo_interface(const struct AuxiliaryData& aux) {
+    if (std::holds_alternative<struct in_pktinfo>(aux.pktinfo)) {
+        return std::get_if<struct in_pktinfo>(&(aux.pktinfo))->ipi_ifindex;
+    }
+    if (std::holds_alternative<struct in6_pktinfo>(aux.pktinfo)) {
+        return std::get_if<struct in6_pktinfo>(&(aux.pktinfo))->ipi6_ifindex;
+    }
+
+    return 0;
+}
+
+inline void
+set_pktinfo4(struct AuxiliaryData& aux, const struct cmsghdr* cmsg) noexcept {
+    if (cmsg == nullptr) return;
+
+    struct in_pktinfo received_pktinfo{};
+    memcpy(&received_pktinfo, CMSG_DATA(cmsg),
+           std::min(sizeof(received_pktinfo),
+                    static_cast<size_t>(cmsg->cmsg_len)));
+    aux.pktinfo = received_pktinfo;
+}
+
+inline void
+set_pktinfo6(struct AuxiliaryData& aux, const struct cmsghdr* cmsg) noexcept {
+    if (cmsg == nullptr) return;
+
+    struct in6_pktinfo received_pktinfo{};
+    memcpy(&received_pktinfo, CMSG_DATA(cmsg),
+           std::min(sizeof(received_pktinfo),
+                    static_cast<size_t>(cmsg->cmsg_len)));
+    aux.pktinfo = received_pktinfo;
+}
+
+struct AuxiliaryData parse_aux(const struct msghdr& mhdr) {
+    struct AuxiliaryData aux{};
+
+    for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&mhdr);
+         (cmsg != NULL) && (cmsg->cmsg_len > 0);
+         cmsg = CMSG_NXTHDR(&mhdr, cmsg)) {
+        switch (cmsg->cmsg_level) {
+            case IPPROTO_IP:
+                switch (cmsg->cmsg_type) {
+                    case IP_PKTINFO:
+                        set_pktinfo4(aux, cmsg);
+                        break;
+
+                    case IP_TOS:
+                    case IP_RECVTOS:
+                        set_dscp(aux, cmsg);
+                        break;
+
+                    case IP_TTL:
+                    case IP_RECVTTL:
+                        set_hoplimit(aux, cmsg);
+                        break;
+
+                    default:
+                        // std::cerr << "unhandled cmsg_type: "
+                        //           << cmsg->cmsg_type << "\n";
+                        break;
+                }
+                break;
+
+            case IPPROTO_IPV6:
+                switch (cmsg->cmsg_type) {
+                    case IPV6_HOPLIMIT:
+                    case IPV6_RECVHOPLIMIT:
+                        set_hoplimit(aux, cmsg);
+                        break;
+
+                    case IPV6_PKTINFO:
+                        set_pktinfo6(aux, cmsg);
+                        break;
+
+                    case IPV6_TCLASS:
+                    case IPV6_RECVTCLASS:
+                        set_dscp(aux, cmsg);
+                        break;
+
+                    default:
+                        // std::cerr << "unhandled cmsg_type: "
+                        //           << cmsg->cmsg_type << "\n";
+                        break;
+                    }
+                break;
+
+            default:
+                // std::cerr << "unhandled cmsg_level: "
+                //           << cmsg->cmsg_level << "\n";
+                break;
+        }
+    }
+
+    return aux;
+}
+
+struct AuxiliaryData parse_aux(const Msg& m) {
+    return parse_aux(MsgIO::from(m).mhdr);
+}
 
 }  // namespace socket
 }  // namespace mcast

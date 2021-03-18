@@ -24,7 +24,7 @@ LICENSE_END */
 
 namespace mcast {
 
-std::string describe(const socket::Msg msg, ssize_t rcvd) {
+std::string describe(const socket::Msg& msg, ssize_t rcvd) {
     const std::string indent_short{"  "};
     const std::string indent_long{"    "};
 
@@ -35,6 +35,20 @@ std::string describe(const socket::Msg msg, ssize_t rcvd) {
     std::stringstream str{};
 
     str << "received " << rcvd << " bytes from " << socket::to_string(msg.ss);
+
+    auto aux{socket::parse_aux(msg)};
+    if (socket::has_hoplimit(aux)) {
+        str << "\n" << indent_short << "hops: " << socket::get_hoplimit(aux);
+    }
+    if (socket::has_dscp(aux)) {
+        str << "\n" << indent_short << "dscp: " << socket::get_dscp(aux);
+    }
+    if (socket::has_pktinfo(aux)) {
+        const unsigned ifindex{socket::get_pktinfo_interface(aux)};
+        str << "\n" << indent_short
+                    << "intf: " << socket::if_index2name(ifindex)
+                    << " (" << ifindex << ")";
+    }
 
     const int bytes_per_line{16};
     char buf[3]{};

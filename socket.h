@@ -435,9 +435,12 @@ set_pktinfo6(struct AuxiliaryData& aux, const struct cmsghdr* cmsg) noexcept {
 struct AuxiliaryData parse_aux(const struct msghdr& mhdr) {
     struct AuxiliaryData aux{};
 
-    for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&mhdr);
+    // CMSG macros appear to require non-const msghdr.
+    struct msghdr *msgp = const_cast<struct msghdr*>(&mhdr);
+
+    for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(msgp);
          (cmsg != NULL) && (cmsg->cmsg_len > 0);
-         cmsg = CMSG_NXTHDR(&mhdr, cmsg)) {
+         cmsg = CMSG_NXTHDR(msgp, cmsg)) {
         switch (cmsg->cmsg_level) {
             case IPPROTO_IP:
                 switch (cmsg->cmsg_type) {

@@ -341,6 +341,13 @@ inline ErrorOr<ssize_t> sendmsg(Socket& s, Msg& m, size_t len) {
     }
     mio.iov[0].iov_len = std::min(len, mio.iov[0].iov_len);
 
+    auto* cmsg{reinterpret_cast<struct cmsghdr*>(mio.mhdr.msg_control)};
+    if (cmsg->cmsg_len == 0) {
+        // Apparently no options in the cmsg area.
+        mio.mhdr.msg_control    = nullptr;
+        mio.mhdr.msg_controllen = 0;
+    }
+
     error::clear();
     const ssize_t rval = ::sendmsg(s.fd, &(mio.mhdr), 0);
     if (rval < 0) {

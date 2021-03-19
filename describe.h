@@ -15,7 +15,9 @@ LICENSE_END */
 
 
 #include <cctype>
+#include <chrono>
 #include <cstdio>
+#include <iomanip>
 #include <sstream>
 #include <string>
 
@@ -23,6 +25,26 @@ LICENSE_END */
 #include "socket.h"
 
 namespace mcast {
+
+namespace {
+
+std::string get_current_time_description() {
+    std::stringstream str{};
+
+    const auto now{std::chrono::system_clock::now()};
+    const auto epoch_us{std::chrono::duration_cast<std::chrono::microseconds>(
+            now.time_since_epoch()).count()};
+    const time_t epoch_s{epoch_us / 1'000'000};
+    str << "@" << epoch_s << "." << (epoch_us % 1'000'000);
+
+    const auto cal_local_s{*(std::localtime(&epoch_s))};
+    str << " " << std::put_time(&cal_local_s, "%Y-%m-%d %H:%M:%S")
+        << "." << (epoch_us % 1'000'000);
+
+    return str.str();
+}
+
+}
 
 std::string describe(const socket::Msg& msg, ssize_t rcvd) {
     const std::string indent_short{"  "};
@@ -34,7 +56,9 @@ std::string describe(const socket::Msg& msg, ssize_t rcvd) {
 
     std::stringstream str{};
 
-    str << "received " << rcvd << " bytes from " << socket::to_string(msg.ss);
+    str << get_current_time_description();
+    str << "\nreceived " << rcvd
+        << " bytes from " << socket::to_string(msg.ss);
 
     auto aux{socket::parse_aux(msg)};
     if (socket::has_hoplimit(aux)) {

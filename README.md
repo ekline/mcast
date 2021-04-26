@@ -5,8 +5,9 @@ bash$ ./mcast -h
 Usage: ./mcast
     [-g multicast_group]
     [-p port]
-    [-m ip_mtu]  # including headers; client mode only
     [-l|-c]      # mode: listen (default)|client
+    [-m ip_mtu]  # including headers; client mode only
+    [-t ttl]     # default: 1; client mode only
 
 Examples:
     -g 224.0.0.251 -p 5353       # IPv4 mDNS

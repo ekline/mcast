@@ -32,8 +32,9 @@ void usage(const char *argv0) {
         << "Usage: " << argv0 << "\n"
         << space << "[-g multicast_group]\n"
         << space << "[-p port]\n"
-        << space << "[-m ip_mtu]  # including headers; client mode only\n"
         << space << "[-l|-c]      # mode: listen (default)|client\n"
+        << space << "[-m ip_mtu]  # including headers; client mode only\n"
+        << space << "[-t ttl]     # default: 1; client mode only\n"
         << "\n"
         << "Examples:\n"
         << space << "-g 224.0.0.251 -p 5353       # IPv4 mDNS\n"
@@ -45,6 +46,11 @@ void usage(const char *argv0) {
 enum class Mode {
     LISTEN,
     CLIENT
+};
+
+struct MulticastOpts {
+    struct sockaddr_storage addr{};
+    int hops{1};
 };
 
 int adjust_mtu(int mtu, int addr_family) {
@@ -69,16 +75,16 @@ int adjust_mtu(int mtu, int addr_family) {
 }
 
 error::Error prepareListenSocket(socket::Socket& s,
-                                 const struct sockaddr_storage& mc_dest) {
+                                 const struct MulticastOpts& opts) {
     auto e = socket::enable(s, SOL_SOCKET, SO_REUSEADDR);
     if (not error::ok(e)) return e;
     e = socket::enable(s, SOL_SOCKET, SO_REUSEPORT);
     if (not error::ok(e)) return e;
 
-    switch (mc_dest.ss_family) {
+    switch (opts.addr.ss_family) {
         case AF_INET: {
-            struct ip_mreqn mc_group{
-                socket::sockaddr_in_ptr(mc_dest)->sin_addr,
+            struct ip_mreqn mreq{
+                socket::sockaddr_in_ptr(opts.addr)->sin_addr,
                 { INADDR_ANY },
                 0,
             };
@@ -86,7 +92,7 @@ error::Error prepareListenSocket(socket::Socket& s,
             struct sockaddr_in listen4{};
             listen4.sin_family = AF_INET;
             listen4.sin_addr = { INADDR_ANY };
-            listen4.sin_port = socket::sockaddr_in_ptr(mc_dest)->sin_port;
+            listen4.sin_port = socket::sockaddr_in_ptr(opts.addr)->sin_port;
 
             for (const auto& e :
                     {
@@ -97,7 +103,7 @@ error::Error prepareListenSocket(socket::Socket& s,
 #ifdef IP_MULTICAST_ALL  // not available on macOS
                         socket::disable(s, IPPROTO_IP, IP_MULTICAST_ALL),
 #endif
-                        socket::set(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, mc_group),
+                        socket::set(s, IPPROTO_IP, IP_ADD_MEMBERSHIP, mreq),
                         socket::bind(s, listen4)
                     }) {
                 if (not error::ok(e)) {
@@ -105,22 +111,22 @@ error::Error prepareListenSocket(socket::Socket& s,
                 }
             }
 
-            s.at_exit.push_back([&s, mc_group]() mutable {
-                socket::set(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, mc_group);
+            s.at_exit.push_back([&s, mreq]() mutable {
+                socket::set(s, IPPROTO_IP, IP_DROP_MEMBERSHIP, mreq);
             });
             return error::success();
         }
 
         case AF_INET6: {
-            struct ipv6_mreq mc_group{
-                socket::sockaddr_in6_ptr(mc_dest)->sin6_addr,
+            struct ipv6_mreq mreq{
+                socket::sockaddr_in6_ptr(opts.addr)->sin6_addr,
                 0,
             };
 
             struct sockaddr_in6 listen6{};
             listen6.sin6_family = AF_INET6;
             listen6.sin6_addr = in6addr_any;
-            listen6.sin6_port = socket::sockaddr_in6_ptr(mc_dest)->sin6_port;
+            listen6.sin6_port = socket::sockaddr_in6_ptr(opts.addr)->sin6_port;
 
             for (const auto& e :
                     {
@@ -131,7 +137,7 @@ error::Error prepareListenSocket(socket::Socket& s,
 #ifdef IPV6_MULTICAST_ALL  // not available on macOS
                         socket::disable(s, IPPROTO_IPV6, IPV6_MULTICAST_ALL),
 #endif
-                        socket::set(s, IPPROTO_IPV6, IPV6_JOIN_GROUP, mc_group),
+                        socket::set(s, IPPROTO_IPV6, IPV6_JOIN_GROUP, mreq),
                         socket::bind(s, listen6)
                     }) {
                 if (not error::ok(e)) {
@@ -139,8 +145,8 @@ error::Error prepareListenSocket(socket::Socket& s,
                 }
             }
 
-            s.at_exit.push_back([&s, mc_group]() mutable {
-                socket::set(s, IPPROTO_IPV6, IPV6_LEAVE_GROUP, mc_group);
+            s.at_exit.push_back([&s, mreq]() mutable {
+                socket::set(s, IPPROTO_IPV6, IPV6_LEAVE_GROUP, mreq);
             });
             return error::success();
         }
@@ -151,8 +157,8 @@ error::Error prepareListenSocket(socket::Socket& s,
 }
 
 error::Error prepareClientSocket(socket::Socket& s,
-                                 const struct sockaddr_storage& mc_dest) {
-    switch (mc_dest.ss_family) {
+                                 const struct MulticastOpts& opts) {
+    switch (opts.addr.ss_family) {
         case AF_INET: {
             struct sockaddr_in client4{};
             client4.sin_family = AF_INET;
@@ -161,9 +167,10 @@ error::Error prepareClientSocket(socket::Socket& s,
 
             for (const auto& e :
                     {
-                        socket::set(s, IPPROTO_IP, IP_MULTICAST_TTL, 4),
+                        socket::set(s, IPPROTO_IP, IP_MULTICAST_TTL,
+                                    opts.hops),
                         socket::bind(s, client4),
-                        socket::connect(s, mc_dest),
+                        socket::connect(s, opts.addr),
                     }) {
                 if (not error::ok(e)) {
                     return e;
@@ -181,9 +188,10 @@ error::Error prepareClientSocket(socket::Socket& s,
 
             for (const auto& e :
                     {
-                        socket::set(s, IPPROTO_IPV6, IPV6_MULTICAST_HOPS, 4),
+                        socket::set(s, IPPROTO_IPV6, IPV6_MULTICAST_HOPS,
+                                    opts.hops),
                         socket::bind(s, client6),
-                        socket::connect(s, mc_dest),
+                        socket::connect(s, opts.addr),
                     }) {
                 if (not error::ok(e)) {
                     return e;
@@ -201,11 +209,12 @@ error::Error prepareClientSocket(socket::Socket& s,
 int main(int argc, char * argv[]) {
     auto mc_dest_or{socket::from_string("239.255.255.251")};
     in_port_t port = 10101;
+    int ttl = 1;
     int mtu = 1500;
     Mode mode{Mode::LISTEN};
 
     int ch{-1};
-    while ((ch = getopt(argc, argv, "cg:hlm:p:?")) != -1) {
+    while ((ch = getopt(argc, argv, "cg:hlm:p:t:?")) != -1) {
         switch (ch) {
             case 'c':
                 mode = Mode::CLIENT;
@@ -241,6 +250,16 @@ int main(int argc, char * argv[]) {
                 }
                 break;
             }
+            case 't': {
+                const int specified_ttl{atoi(optarg)};
+                if (specified_ttl > 0 && specified_ttl <= 0xff) {
+                    ttl = specified_ttl;
+                } else {
+                    std::cerr << "specified ttl invalid or out of range\n";
+                    exit(EXIT_FAILURE);
+                }
+                break;
+            }
             default:
                 usage(argv[0]);
                 exit(EXIT_FAILURE);
@@ -268,7 +287,9 @@ int main(int argc, char * argv[]) {
 
     switch (mode) {
         case Mode::LISTEN: {
-            auto e = prepareListenSocket(s, mc_dest);
+            const struct MulticastOpts opts{mc_dest};
+
+            auto e = prepareListenSocket(s, opts);
             if (not error::ok(e)) {
                 std::cerr << error::to_string(e);
                 exit(EXIT_FAILURE);
@@ -288,7 +309,9 @@ int main(int argc, char * argv[]) {
         }
 
         case Mode::CLIENT: {
-            auto e = prepareClientSocket(s, mc_dest);
+            const struct MulticastOpts opts{mc_dest, ttl};
+
+            auto e = prepareClientSocket(s, opts);
             if (not error::ok(e)) {
                 std::cerr << error::to_string(e);
                 exit(EXIT_FAILURE);
